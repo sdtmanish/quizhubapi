@@ -1,0 +1,7 @@
+
+Concept	Representation in our code
+Socket-	Each connected client (player or admin) → socket object with unique socket.id
+Room-	A game instance → identified by roomId → holds players, scores, admin, questions
+Admin-	Special socket per room → controls game (start_quiz, next_question) → stored in games[roomId].admin
+Player-	Normal sockets in a room → join room, submit answers, receive questions/scores
+Server- (io)	Manages all sockets → can broadcast to rooms (io.to(roomId).emit(...))

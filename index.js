@@ -9,7 +9,7 @@ const io = new Server(httpServer, {
   cors: { origin: "*" },
 });
 
-// roomId -> {admin, players, scores, currentQ, questions, answered}
+// roomId -> {admin, players, scores, currentQ, questions, answered, adminName}
 let games = {};
 
 io.on("connection", (socket) => {
@@ -22,6 +22,7 @@ io.on("connection", (socket) => {
     if (!games[roomId]) {
       games[roomId] = {
         admin: null,
+        adminName: null,
         players: {},
         scores: {},
         currentQ: 0,
@@ -32,28 +33,28 @@ io.on("connection", (socket) => {
 
     const game = games[roomId];
 
-    // If the player's socket ID is already in the game,
-    // it means they are reconnecting. Just send them the current state.
-    if (game.players[socket.id]) {
+    // Check if the user is reconnecting.
+    if (game.players[socket.id] || game.admin === socket.id) {
       socket.emit("game_state", {
         players: game.players,
         scores: game.scores,
         currentQ: game.currentQ,
         adminId: game.admin,
-        adminName: game.players[game.admin], // ⭐ UPDATED: Added adminName
+        adminName: game.adminName,
       });
       return;
     }
 
-    // Assign admin if no admin exists in the game room.
-    // This ensures the first player to join is always the admin.
+    // If no admin exists, make the first player to join the admin.
     if (!game.admin) {
       game.admin = socket.id;
+      game.adminName = playerName;
       console.log(`⭐ Admin for room ${roomId} is ${socket.id}`);
+    } else {
+      // Add non-admin players to the players object.
+      game.players[socket.id] = playerName;
+      game.scores[socket.id] = 0;
     }
-
-    game.players[socket.id] = playerName;
-    game.scores[socket.id] = 0;
 
     // Send updated state to all players in room
     io.to(roomId).emit("game_state", {
@@ -61,7 +62,7 @@ io.on("connection", (socket) => {
       scores: game.scores,
       currentQ: game.currentQ,
       adminId: game.admin,
-      adminName: game.players[game.admin], // ⭐ UPDATED: Added adminName
+      adminName: game.adminName,
     });
   });
 
@@ -81,13 +82,12 @@ io.on("connection", (socket) => {
       index: 0,
     });
 
-    // ⭐ UPDATED: Emit the game state to all players after the quiz starts.
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
       currentQ: game.currentQ,
       adminId: game.admin,
-      adminName: game.players[game.admin],
+      adminName: game.adminName,
     });
   });
 
@@ -110,13 +110,12 @@ io.on("connection", (socket) => {
       io.to(roomId).emit("quiz_ended", game.scores);
     }
 
-    // ⭐ UPDATED: Emit the game state to all players after each question.
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
       currentQ: game.currentQ,
       adminId: game.admin,
-      adminName: game.players[game.admin],
+      adminName: game.adminName,
     });
   });
 
@@ -148,31 +147,36 @@ io.on("connection", (socket) => {
     for (const roomId in games) {
       const game = games[roomId];
 
-      if (game.players[socket.id]) {
+      // If the disconnecting user is the admin
+      if (socket.id === game.admin) {
+        const playerIds = Object.keys(game.players);
+        if (playerIds.length > 0) {
+          // Promote the first player in the list to admin
+          game.admin = playerIds[0];
+          game.adminName = game.players[game.admin];
+                    
+          // Remove the promoted player from the players list
+          delete game.players[game.admin];
+          delete game.scores[game.admin];
+        } else {
+          delete games[roomId]; // cleanup empty room
+          console.log(`🗑️ Room ${roomId} deleted`);
+          return;
+        }
+      } else if (game.players[socket.id]) {
+        // If a regular player left, just remove them
         delete game.players[socket.id];
         delete game.scores[socket.id];
-
-        // If admin left
-        if (socket.id === game.admin) {
-          const playerIds = Object.keys(game.players);
-          if (playerIds.length > 0) {
-            game.admin = playerIds[0]; // promote first player
-          } else {
-            delete games[roomId]; // cleanup empty room
-            console.log(`🗑️ Room ${roomId} deleted`);
-            return; // exit the loop
-          }
-        }
-        
-        // Send the full game_state to update the UI
-        io.to(roomId).emit("game_state", {
-          players: game.players,
-          scores: game.scores,
-          currentQ: game.currentQ,
-          adminId: game.admin,
-          adminName: game.players[game.admin], // ⭐ UPDATED: Added adminName
-        });
       }
+        
+      // Send the full game_state to update the UI
+      io.to(roomId).emit("game_state", {
+        players: game.players,
+        scores: game.scores,
+        currentQ: game.currentQ,
+        adminId: game.admin,
+        adminName: game.adminName,
+      });
     }
   });
 });

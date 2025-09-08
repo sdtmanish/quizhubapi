@@ -16,7 +16,7 @@ io.on("connection", (socket) => {
   console.log("✅ User Connected:", socket.id);
 
   // Player joins a game
-  socket.on("join_game", ({ roomId, playerName, isAdmin }) => {
+  socket.on("join_game", ({ roomId, playerName }) => {
     socket.join(roomId);
 
     if (!games[roomId]) {
@@ -40,11 +40,11 @@ io.on("connection", (socket) => {
         scores: game.scores,
         currentQ: game.currentQ,
         adminId: game.admin,
+        adminName: game.players[game.admin], // ⭐ UPDATED: Added adminName
       });
       return;
     }
 
-    // ⭐ UPDATED LOGIC HERE ⭐
     // Assign admin if no admin exists in the game room.
     // This ensures the first player to join is always the admin.
     if (!game.admin) {
@@ -61,6 +61,7 @@ io.on("connection", (socket) => {
       scores: game.scores,
       currentQ: game.currentQ,
       adminId: game.admin,
+      adminName: game.players[game.admin], // ⭐ UPDATED: Added adminName
     });
   });
 
@@ -78,6 +79,15 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("show_question", {
       question: questions[0],
       index: 0,
+    });
+
+    // ⭐ UPDATED: Emit the game state to all players after the quiz starts.
+    io.to(roomId).emit("game_state", {
+      players: game.players,
+      scores: game.scores,
+      currentQ: game.currentQ,
+      adminId: game.admin,
+      adminName: game.players[game.admin],
     });
   });
 
@@ -99,6 +109,15 @@ io.on("connection", (socket) => {
     } else {
       io.to(roomId).emit("quiz_ended", game.scores);
     }
+
+    // ⭐ UPDATED: Emit the game state to all players after each question.
+    io.to(roomId).emit("game_state", {
+      players: game.players,
+      scores: game.scores,
+      currentQ: game.currentQ,
+      adminId: game.admin,
+      adminName: game.players[game.admin],
+    });
   });
 
   // Player submits an answer
@@ -133,25 +152,26 @@ io.on("connection", (socket) => {
         delete game.players[socket.id];
         delete game.scores[socket.id];
 
-        // Instead of player_list, send the full game_state to update the UI
-        io.to(roomId).emit("game_state", {
-          players: game.players,
-          scores: game.scores,
-          currentQ: game.currentQ,
-          adminId: game.admin,
-        });
-
         // If admin left
         if (socket.id === game.admin) {
           const playerIds = Object.keys(game.players);
           if (playerIds.length > 0) {
             game.admin = playerIds[0]; // promote first player
-            io.to(roomId).emit("new_admin", game.admin);
           } else {
             delete games[roomId]; // cleanup empty room
             console.log(`🗑️ Room ${roomId} deleted`);
+            return; // exit the loop
           }
         }
+        
+        // Send the full game_state to update the UI
+        io.to(roomId).emit("game_state", {
+          players: game.players,
+          scores: game.scores,
+          currentQ: game.currentQ,
+          adminId: game.admin,
+          adminName: game.players[game.admin], // ⭐ UPDATED: Added adminName
+        });
       }
     }
   });

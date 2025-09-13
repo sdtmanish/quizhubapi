@@ -49,73 +49,46 @@ const shuffleArray = (array) => {
 };
 
 // --- In-memory game storage ---
-let games = {}; // roomId -> { admin, players, scores, playerQuestions, playerCurrentQIndex, answered, isQuizActive }
+let games = {}; // roomId -> { admin, players, scores, quizQuestions, currentQuestionIndex, answered, isQuizActive }
 
-// ⭐ NEW: Map of gameId to playerId to handle reconnections
-let gameIdToPlayerIdMap = {};
-
-// --- Socket.IO Events ---
 io.on("connection", (socket) => {
   console.log("✅ User Connected:", socket.id);
 
-  socket.on("join_game", async ({ roomId, playerName, isAdmin, gameId }) => { // ⭐ MODIFIED: Accepts gameId
-    // Create new room if admin
-    if (!games[roomId]) {
+  socket.on("join_game", async ({ roomId, playerName, isAdmin }) => {
+    let game = games[roomId];
+
+    if (!game) {
       if (!isAdmin) {
         socket.emit("room_not_found");
         return;
       }
-
-      games[roomId] = {
+      // If no room exists, create one with the admin and initial state
+      game = {
         admin: socket.id,
         adminName: playerName,
         players: {},
         scores: {},
-        playerQuestions: {},
-        playerCurrentQIndex: {},
+        quizQuestions: [], // ⭐ Centralized questions, populated on 'start_quiz'
+        currentQuestionIndex: -1, // ⭐ Start at -1
         answered: {},
-        isQuizActive: false, // ⭐ NEW
-        adminQuestionList: [], // ⭐ NEW
-        currentQuestionIndex: 0, // ⭐ NEW
+        isQuizActive: false,
       };
+      games[roomId] = game;
       console.log(`⭐ Room ${roomId} created by admin ${playerName}`);
     }
-
-    const game = games[roomId];
 
     if (isAdmin && socket.id !== game.admin) {
       socket.emit("admin_exists");
       return;
     }
-
+    
     socket.join(roomId);
 
     if (!isAdmin) {
-      let playerId = socket.id;
-      
-      // ⭐ NEW: Check if this is a reconnection based on gameId
-      if (gameId && gameIdToPlayerIdMap[gameId]) {
-        const oldSocketId = gameIdToPlayerIdMap[gameId];
-        // Re-associate existing player data with the new socket ID
-        game.players[playerId] = game.players[oldSocketId];
-        game.scores[playerId] = game.scores[oldSocketId];
-        game.playerQuestions[playerId] = game.playerQuestions[oldSocketId];
-        game.playerCurrentQIndex[playerId] = game.playerCurrentQIndex[oldSocketId];
-
-        delete game.players[oldSocketId];
-        delete game.scores[oldSocketId];
-        delete game.playerQuestions[oldSocketId];
-        delete game.playerCurrentQIndex[oldSocketId];
-        console.log(`🔄 Player ${playerName} reconnected to room ${roomId}`);
-      } else {
-        // New player joins
-        game.players[playerId] = playerName || "Anonymous";
-        game.scores[playerId] = 0;
-        const allQuestions = await Question.find({});
-        game.playerQuestions[playerId] = shuffleArray(allQuestions);
-        game.playerCurrentQIndex[playerId] = 0;
+      if (!game.players[socket.id]) {
+        game.players[socket.id] = playerName || "Anonymous";
+        game.scores[socket.id] = 0;
       }
-      gameIdToPlayerIdMap[gameId] = playerId; // ⭐ NEW: Update the mapping
     }
 
     // Send updated game state to all
@@ -126,17 +99,18 @@ io.on("connection", (socket) => {
       adminName: game.adminName,
     });
     
-    // ⭐ NEW: Send the current question to the newly connected player if the quiz is active
-    if (!isAdmin && game.isQuizActive) {
-      const qIndex = game.playerCurrentQIndex[socket.id];
-      const playerQuestions = game.playerQuestions[socket.id];
-      if (qIndex < playerQuestions.length) {
-        const question = playerQuestions[qIndex];
-        io.to(socket.id).emit("show_question", { question, index: qIndex });
+    // If quiz is active, send the current question to the newly connected user
+    if (game.isQuizActive && game.currentQuestionIndex !== -1) {
+      const question = game.quizQuestions[game.currentQuestionIndex];
+      if (isAdmin) {
+        socket.emit("admin_show_question", { question, index: game.currentQuestionIndex });
+      } else {
+        socket.emit("show_question", { question, index: game.currentQuestionIndex });
       }
     }
   });
 
+  // ⭐ NEW: 'start_quiz' will now load the questions and start the quiz
   socket.on("start_quiz", async ({ roomId }) => {
     const game = games[roomId];
     if (!game || socket.id !== game.admin) return;
@@ -146,29 +120,28 @@ io.on("connection", (socket) => {
       socket.emit("no_questions_found");
       return;
     }
-
-    // ⭐ MODIFIED: Set the admin's question list and a central question index
-    game.adminQuestionList = shuffleArray(allQuestions);
-    game.currentQuestionIndex = 0;
+    
+    game.quizQuestions = shuffleArray(allQuestions);
     game.isQuizActive = true;
+    game.currentQuestionIndex = 0; // The first question is at index 0
     game.answered = {};
 
-    // ⭐ NEW: Send the first question to the admin
+    const firstQuestion = game.quizQuestions[0];
+    
+    // Send the first question to the admin
     io.to(game.admin).emit("admin_show_question", {
-      question: game.adminQuestionList[game.currentQuestionIndex],
-      index: game.currentQuestionIndex,
+      question: firstQuestion,
+      index: 0,
     });
 
-    // ⭐ MODIFIED: Send unique shuffled questions to each player
-    for (const playerId in game.players) {
-      game.playerQuestions[playerId] = shuffleArray([...allQuestions]);
-      game.playerCurrentQIndex[playerId] = 0;
-      io.to(playerId).emit("show_question", {
-        question: game.playerQuestions[playerId][0],
-        index: 0,
-      });
-    }
+    // Send the first question to all players
+    io.to(roomId).emit("show_question", {
+      question: firstQuestion,
+      index: 0,
+    });
+    console.log(`⏩ Quiz started. Question 1 sent to room ${roomId}`);
   });
+
 
   socket.on("next_question", ({ roomId }) => {
     const game = games[roomId];
@@ -177,37 +150,26 @@ io.on("connection", (socket) => {
     game.currentQuestionIndex++;
     game.answered = {};
 
-    if (game.currentQuestionIndex < game.adminQuestionList.length) {
-      // ⭐ NEW: Send the next question to the admin
+    if (game.currentQuestionIndex < game.quizQuestions.length) {
+      const nextQuestion = game.quizQuestions[game.currentQuestionIndex];
+
+      // Send the next question to the admin
       io.to(game.admin).emit("admin_show_question", {
-        question: game.adminQuestionList[game.currentQuestionIndex],
+        question: nextQuestion,
         index: game.currentQuestionIndex,
       });
-    } else {
-      // ⭐ NEW: End the quiz if admin has no more questions
-      game.isQuizActive = false;
-      io.to(game.admin).emit("quiz_ended", game.scores);
-    }
 
-    let anyPlayerHasQuestionsLeft = false;
-    for (const playerId in game.players) {
-      game.playerCurrentQIndex[playerId]++;
-      
-      const nextQIndex = game.playerCurrentQIndex[playerId];
-      const playerQuestions = game.playerQuestions[playerId];
-      
-      if (nextQIndex < playerQuestions.length) {
-        const nextQuestion = playerQuestions[nextQIndex];
-        io.to(playerId).emit("show_question", { question: nextQuestion, index: nextQIndex });
-        anyPlayerHasQuestionsLeft = true;
-      } else {
-        io.to(playerId).emit("player_quiz_ended");
-      }
-    }
-    
-    if (!anyPlayerHasQuestionsLeft) {
+      // Send the next question to all players
+      io.to(roomId).emit("show_question", {
+        question: nextQuestion,
+        index: game.currentQuestionIndex,
+      });
+      console.log(`⏩ Admin advanced to question ${game.currentQuestionIndex + 1} in room ${roomId}`);
+    } else {
+      // Quiz is over
       game.isQuizActive = false;
-      io.to(roomId).emit("quiz_ended", game.scores);
+      io.to(roomId).emit("quiz_ended");
+      console.log(`🏁 Quiz ended for room ${roomId}`);
     }
 
     io.to(roomId).emit("game_state", {
@@ -222,11 +184,10 @@ io.on("connection", (socket) => {
   socket.on("submit_answer", ({ roomId, questionId, answer }) => {
     const game = games[roomId];
     if (!game || !game.players[socket.id]) return;
-
     if (game.answered[socket.id]) return;
 
-    const currentQuestion = game.playerQuestions[socket.id].find(q => q._id.toString() === questionId);
-    if (!currentQuestion) return;
+    const currentQuestion = game.quizQuestions[game.currentQuestionIndex];
+    if (!currentQuestion || currentQuestion._id.toString() !== questionId) return;
 
     game.answered[socket.id] = true;
 
@@ -236,43 +197,10 @@ io.on("connection", (socket) => {
 
     io.to(roomId).emit("score_update", game.scores);
   });
-
-  // Handle disconnect
+  
   socket.on("disconnect", () => {
     console.log("❌ User Disconnected:", socket.id);
-
-    for (const roomId in games) {
-      const game = games[roomId];
-      if (!game) continue;
-
-      if (socket.id === game.admin) {
-        const playerIds = Object.keys(game.players);
-        if (playerIds.length > 0) {
-          game.admin = playerIds[0];
-          game.adminName = game.players[game.admin];
-          delete game.players[game.admin];
-          delete game.scores[game.admin];
-          delete game.playerQuestions[game.admin];
-          delete game.playerCurrentQIndex[game.admin];
-        } else {
-          delete games[roomId];
-          console.log(`🗑️ Room ${roomId} deleted`);
-          continue;
-        }
-      } else if (game.players[socket.id]) {
-        // ⭐ MODIFIED: Don't delete player data on disconnect to allow reconnection
-        // We just need to clear the socket.id from the game.players object
-        // The data in game.playerQuestions and game.scores will be re-associated later
-        // if the player reconnects with the same gameId.
-      }
-
-      io.to(roomId).emit("game_state", {
-        players: game.players,
-        scores: game.scores,
-        adminId: game.admin,
-        adminName: game.adminName,
-      });
-    }
+    // You can add logic here to handle disconnections, but the core game state logic is now stable.
   });
 });
 

@@ -13,15 +13,19 @@ const io = new Server(httpServer, {
 // --- Database Setup ---
 const DB_URI = "mongodb+srv://sdtmanishbailwal_db_user:TErwqJTLIIDZsWpF@quizapp.vajuu70.mongodb.net/?retryWrites=true&w=majority&appName=QuizApp";
 
-const QuestionSchema = new mongoose.Schema({
-  type: { type: String, required: true },
-  question: { type: String, required: true },
-  options: { type: [String], required: true },
-  correctAnswer: { type: Number, required: true },
-  mediaUrl: { type: String, required: false },
-}, { timestamps: true });
+const QuestionSchema = new mongoose.Schema(
+  {
+    type: { type: String, required: true },
+    question: { type: String, required: true },
+    options: { type: [String], required: true },
+    correctAnswer: { type: Number, required: true },
+    mediaUrl: { type: String, required: false },
+  },
+  { timestamps: true }
+);
 
-const Question = mongoose.models.Question || mongoose.model("Question", QuestionSchema);
+const Question =
+  mongoose.models.Question || mongoose.model("Question", QuestionSchema);
 
 const dbConnect = async () => {
   if (mongoose.connection.readyState >= 1) return;
@@ -49,6 +53,7 @@ io.on("connection", (socket) => {
         return;
       }
 
+      // Admin creating a new room
       games[roomId] = {
         admin: socket.id,
         adminName: playerName,
@@ -77,12 +82,22 @@ io.on("connection", (socket) => {
       game.scores[socket.id] = 0;
     }
 
+    // Send current question to new joiner if quiz already started
+    if (game.questions.length > 0) {
+      socket.emit("show_question", {
+        question: game.questions[game.currentQ],
+        index: game.currentQ,
+      });
+    }
+
+    // Send updated game state to all clients
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
       currentQ: game.currentQ,
       adminId: game.admin,
       adminName: game.adminName,
+      questions: game.questions,
     });
   });
 
@@ -112,6 +127,7 @@ io.on("connection", (socket) => {
       currentQ: game.currentQ,
       adminId: game.admin,
       adminName: game.adminName,
+      questions: game.questions,
     });
   });
 
@@ -138,6 +154,7 @@ io.on("connection", (socket) => {
       currentQ: game.currentQ,
       adminId: game.admin,
       adminName: game.adminName,
+      questions: game.questions,
     });
   });
 
@@ -193,6 +210,7 @@ io.on("connection", (socket) => {
         currentQ: game.currentQ,
         adminId: game.admin,
         adminName: game.adminName,
+        questions: game.questions,
       });
     }
   });

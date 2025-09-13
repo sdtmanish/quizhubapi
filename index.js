@@ -39,7 +39,7 @@ const dbConnect = async () => {
 dbConnect();
 
 // --- In-memory game storage ---
-let games = {}; // roomId -> { admin, adminName, players, scores, currentQ, questions, answered }
+let games = {}; // roomId -> { admin, players, scores, currentQ, questions, answered }
 
 // --- Socket.IO Events ---
 io.on("connection", (socket) => {
@@ -47,17 +47,17 @@ io.on("connection", (socket) => {
 
   // Player/Admin joins a game
   socket.on("join_game", ({ roomId, playerName, isAdmin }) => {
+    // Create new room if admin
     if (!games[roomId]) {
       if (!isAdmin) {
         socket.emit("room_not_found");
         return;
       }
 
-      // Admin creating a new room
       games[roomId] = {
         admin: socket.id,
         adminName: playerName,
-        players: {}, // only real players
+        players: {}, // real players only
         scores: {},
         currentQ: 0,
         questions: [],
@@ -78,11 +78,11 @@ io.on("connection", (socket) => {
 
     // Only add to players if NOT admin
     if (!isAdmin) {
-      game.players[socket.id] = playerName;
+      game.players[socket.id] = playerName || "Anonymous";
       game.scores[socket.id] = 0;
     }
 
-    // Send current question to new joiner if quiz already started
+    // If quiz started, send current question to the new player
     if (game.questions.length > 0) {
       socket.emit("show_question", {
         question: game.questions[game.currentQ],
@@ -90,7 +90,7 @@ io.on("connection", (socket) => {
       });
     }
 
-    // Send updated game state to all clients
+    // Send updated game state to all
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
@@ -163,11 +163,13 @@ io.on("connection", (socket) => {
     const game = games[roomId];
     if (!game) return;
 
+    // Prevent multiple submissions
+    if (game.answered[socket.id]) return;
+
     const qIndex = game.currentQ;
     const currentQuestion = game.questions[qIndex];
     if (!currentQuestion) return;
 
-    if (game.answered[socket.id]) return; // prevent multiple answers
     game.answered[socket.id] = true;
 
     if (answer === currentQuestion.correctAnswer) {
@@ -183,13 +185,13 @@ io.on("connection", (socket) => {
 
     for (const roomId in games) {
       const game = games[roomId];
-
       if (!game) continue;
 
+      // Admin disconnects
       if (socket.id === game.admin) {
-        // If admin leaves, promote first player if exists
         const playerIds = Object.keys(game.players);
         if (playerIds.length > 0) {
+          // Promote first player as new admin
           game.admin = playerIds[0];
           game.adminName = game.players[game.admin];
           delete game.players[game.admin];
@@ -200,6 +202,7 @@ io.on("connection", (socket) => {
           continue;
         }
       } else if (game.players[socket.id]) {
+        // Player disconnects
         delete game.players[socket.id];
         delete game.scores[socket.id];
       }

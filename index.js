@@ -45,15 +45,14 @@ io.on("connection", (socket) => {
   socket.on("join_game", ({ roomId, playerName, isAdmin }) => {
     if (!games[roomId]) {
       if (!isAdmin) {
-        // Player trying to join non-existent room
         socket.emit("room_not_found");
         return;
       }
-      // Admin creating a new room
+
       games[roomId] = {
         admin: socket.id,
         adminName: playerName,
-        players: {},
+        players: {}, // only real players
         scores: {},
         currentQ: 0,
         questions: [],
@@ -72,13 +71,12 @@ io.on("connection", (socket) => {
 
     socket.join(roomId);
 
-    // Add player if not admin
+    // Only add to players if NOT admin
     if (!isAdmin) {
       game.players[socket.id] = playerName;
       game.scores[socket.id] = 0;
     }
 
-    // Send updated game state to all clients
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
@@ -91,8 +89,7 @@ io.on("connection", (socket) => {
   // Admin starts the quiz
   socket.on("start_quiz", async ({ roomId }) => {
     const game = games[roomId];
-    if (!game) return;
-    if (socket.id !== game.admin) return;
+    if (!game || socket.id !== game.admin) return;
 
     const questions = await Question.find({});
     if (!questions.length) {
@@ -121,8 +118,7 @@ io.on("connection", (socket) => {
   // Admin moves to next question
   socket.on("next_question", ({ roomId }) => {
     const game = games[roomId];
-    if (!game) return;
-    if (socket.id !== game.admin) return;
+    if (!game || socket.id !== game.admin) return;
 
     game.currentQ++;
     game.answered = {};
@@ -171,7 +167,10 @@ io.on("connection", (socket) => {
     for (const roomId in games) {
       const game = games[roomId];
 
+      if (!game) continue;
+
       if (socket.id === game.admin) {
+        // If admin leaves, promote first player if exists
         const playerIds = Object.keys(game.players);
         if (playerIds.length > 0) {
           game.admin = playerIds[0];

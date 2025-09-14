@@ -111,7 +111,7 @@ io.on("connection", (socket) => {
         game.scores[playerId] = 0;
         const allQuestions = await Question.find({});
         game.playerQuestions[playerId] = shuffleArray([...allQuestions]);
-        game.playerCurrentQIndex[playerId] = -1;
+        game.playerCurrentQIndex[playerId] = 0;
       }
       gameIdToPlayerIdMap[gameId] = playerId;
     }
@@ -122,10 +122,16 @@ io.on("connection", (socket) => {
       scores: game.scores,
       adminId: game.admin,
       adminName: game.adminName,
+      questions: game?.playerQuestions,
+      currentQuestionIndex: game?.playerCurrentQIndex[socket.id],
     });
 
     // If player reconnects while quiz is active → resume question
-    if (!isAdmin && game.isQuizActive && game.playerCurrentQIndex[socket.id] !== -1) {
+    if (
+      !isAdmin &&
+      game.isQuizActive &&
+      game.playerCurrentQIndex[socket.id] !== -1
+    ) {
       const qIndex = game.playerCurrentQIndex[socket.id];
       const playerQuestions = game.playerQuestions[socket.id];
       if (qIndex < playerQuestions.length) {
@@ -222,6 +228,8 @@ io.on("connection", (socket) => {
       scores: game.scores,
       adminId: game.admin,
       adminName: game.adminName,
+      questions: game?.playerQuestions,
+      // currentQuestionIndex: game?.playerCurrentQIndex,
     });
   });
 

@@ -11,8 +11,7 @@ const io = new Server(httpServer, {
 });
 
 // --- Database Setup ---
-const DB_URI =
-  "mongodb+srv://sdtmanishbailwal_db_user:TErwqJTLIIDZsWpF@quizapp.vajuu70.mongodb.net/?retryWrites=true&w=majority&appName=QuizApp";
+const DB_URI = "mongodb+srv://sdtmanishbailwal_db_user:TErwqJTLIIDZsWpF@quizapp.vajuu70.mongodb.net/?retryWrites=true&w=majority&appName=QuizApp";
 
 const QuestionSchema = new mongoose.Schema(
   {
@@ -25,8 +24,7 @@ const QuestionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Question =
-  mongoose.models.Question || mongoose.model("Question", QuestionSchema);
+const Question = mongoose.models.Question || mongoose.model("Question", QuestionSchema);
 
 const dbConnect = async () => {
   if (mongoose.connection.readyState >= 1) return;
@@ -68,13 +66,14 @@ io.on("connection", (socket) => {
         adminName: playerName,
         players: {},
         scores: {},
-        playerQuestions: {},
+        playerQuestions: {}, 
+        playerQuestionsList: {}, 
         playerCurrentQIndex: {},
         answered: {},
         isQuizActive: false,
         adminQuestionList: [],
         currentQuestionIndex: -1,
-        eliminatedOptions: {}, // ✅ New object to store eliminated options
+        eliminatedOptions: {},
       };
       console.log(`⭐ Room ${roomId} created by admin ${playerName}`);
     }
@@ -97,14 +96,14 @@ io.on("connection", (socket) => {
         game.players[playerId] = game.players[oldSocketId];
         game.scores[playerId] = game.scores[oldSocketId];
         game.playerQuestions[playerId] = game.playerQuestions[oldSocketId];
-        game.playerCurrentQIndex[playerId] =
-          game.playerCurrentQIndex[oldSocketId];
-        // ✅ Preserve eliminated options on reconnection
+        game.playerQuestionsList[playerId] = game.playerQuestionsList[oldSocketId];
+        game.playerCurrentQIndex[playerId] = game.playerCurrentQIndex[oldSocketId];
         game.eliminatedOptions[playerId] = game.eliminatedOptions[oldSocketId] || [];
 
         delete game.players[oldSocketId];
         delete game.scores[oldSocketId];
         delete game.playerQuestions[oldSocketId];
+        delete game.playerQuestionsList[oldSocketId];
         delete game.playerCurrentQIndex[oldSocketId];
         delete game.eliminatedOptions[oldSocketId];
 
@@ -114,37 +113,29 @@ io.on("connection", (socket) => {
         game.players[playerId] = playerName || "Anonymous";
         game.scores[playerId] = 0;
         const allQuestions = await Question.find({});
-        game.playerQuestions[playerId] = shuffleArray([...allQuestions]);
-        game.playerCurrentQIndex[playerId] = 0;
-        game.eliminatedOptions[playerId] = []; // ✅ Initialize eliminated options for new player
+        game.playerQuestionsList[playerId] = shuffleArray([...allQuestions]);
+        game.playerCurrentQIndex[playerId] = -1;
+        game.eliminatedOptions[playerId] = [];
+        console.log(`➕ New player ${playerName} joined room ${roomId}.`);
+        
+        // **NEW:** Populate the current question for the player
+        if (game.playerQuestionsList[playerId].length > 0) {
+          game.playerQuestions[playerId] = game.playerQuestionsList[playerId][0];
+        }
       }
       gameIdToPlayerIdMap[gameId] = playerId;
     }
 
-    // Send updated game state
+    // Send updated game state to everyone in the room
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
       adminId: game.admin,
       adminName: game.adminName,
-      questions: game?.playerQuestions,
-      currentQuestionIndex: game?.playerCurrentQIndex[socket.id],
-      eliminatedOptions: game?.eliminatedOptions, // ✅ Include eliminated options in the game state
+      questions: game.playerQuestions,
+      currentQuestionIndex: game.currentQuestionIndex,
+      eliminatedOptions: game.eliminatedOptions,
     });
-
-    // If player reconnects while quiz is active → resume question
-    if (
-      !isAdmin &&
-      game.isQuizActive &&
-      game.playerCurrentQIndex[socket.id] !== -1
-    ) {
-      const qIndex = game.playerCurrentQIndex[socket.id];
-      const playerQuestions = game.playerQuestions[socket.id];
-      if (qIndex < playerQuestions.length) {
-        const question = playerQuestions[qIndex];
-        io.to(socket.id).emit("show_question", { question, index: qIndex });
-      }
-    }
   });
 
   // --- Admin starts quiz ---
@@ -163,29 +154,33 @@ io.on("connection", (socket) => {
     game.currentQuestionIndex = 0;
     game.isQuizActive = true;
     game.answered = {};
+    game.eliminatedOptions = {};
 
-    // Assign shuffled questions to each player
+    // Assign shuffled questions to each player & send them their first question
     for (const playerId in game.players) {
-      game.playerQuestions[playerId] = shuffleArray([...allQuestions]);
+      const playerQuestions = game.playerQuestionsList[playerId];
       game.playerCurrentQIndex[playerId] = 0;
-      game.eliminatedOptions[playerId] = []; // ✅ Initialize eliminated options for all players on start
-    }
+      
+      game.playerQuestions[playerId] = playerQuestions[0]; 
 
-    console.log(`🚀 Quiz started in room ${roomId}`);
-
-    // Send first question to admin
-    io.to(game.admin).emit("admin_show_question", {
-      question: game.adminQuestionList[0],
-      index: 0,
-    });
-
-    // Send first (different) question to each player
-    for (const playerId in game.players) {
       io.to(playerId).emit("show_question", {
-        question: game.playerQuestions[playerId][0],
+        question: playerQuestions[0],
         index: 0,
       });
     }
+
+    console.log(`🚀 Quiz started in room ${roomId}`);
+    
+    // Broadcast the updated game state to everyone, including the admin
+    io.to(roomId).emit("game_state", {
+      players: game.players,
+      scores: game.scores,
+      adminId: game.admin,
+      adminName: game.adminName,
+      questions: game.playerQuestions,
+      currentQuestionIndex: game.currentQuestionIndex,
+      eliminatedOptions: game.eliminatedOptions,
+    });
   });
 
   // --- Admin sends next question ---
@@ -195,49 +190,41 @@ io.on("connection", (socket) => {
 
     game.currentQuestionIndex++;
     game.answered = {};
-    game.eliminatedOptions = {}; // ✅ Reset eliminated options for all players for the new question
+    game.eliminatedOptions = {};
 
-    if (game.currentQuestionIndex < game.adminQuestionList.length) {
-      io.to(game.admin).emit("admin_show_question", {
-        question: game.adminQuestionList[game.currentQuestionIndex],
-        index: game.currentQuestionIndex,
-      });
-    } else {
+    if (game.currentQuestionIndex >= game.adminQuestionList.length) {
       game.isQuizActive = false;
       io.to(roomId).emit("quiz_ended", game.scores);
       return;
     }
 
-    let anyPlayerHasQuestionsLeft = false;
+    // Update the current question for each player
     for (const playerId in game.players) {
       game.playerCurrentQIndex[playerId]++;
       const nextQIndex = game.playerCurrentQIndex[playerId];
-      const playerQuestions = game.playerQuestions[playerId];
+      const playerQuestions = game.playerQuestionsList[playerId];
 
       if (nextQIndex < playerQuestions.length) {
         const nextQuestion = playerQuestions[nextQIndex];
+        game.playerQuestions[playerId] = nextQuestion;
+        
         io.to(playerId).emit("show_question", {
           question: nextQuestion,
           index: nextQIndex,
         });
-        anyPlayerHasQuestionsLeft = true;
       } else {
         io.to(playerId).emit("player_quiz_ended");
       }
     }
-
-    if (!anyPlayerHasQuestionsLeft) {
-      game.isQuizActive = false;
-      io.to(roomId).emit("quiz_ended", game.scores);
-    }
-
+    
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
       adminId: game.admin,
       adminName: game.adminName,
-      questions: game?.playerQuestions,
-      currentQuestionIndex: game?.currentQuestionIndex,
+      questions: game.playerQuestions,
+      currentQuestionIndex: game.currentQuestionIndex,
+      eliminatedOptions: game.eliminatedOptions,
     });
   });
 
@@ -253,7 +240,6 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Store the eliminated option for the target player
     if (!game.eliminatedOptions[targetPlayerId]) {
       game.eliminatedOptions[targetPlayerId] = [];
     }
@@ -262,19 +248,18 @@ io.on("connection", (socket) => {
       game.eliminatedOptions[targetPlayerId].push(parsedOptionIndex);
     }
 
-    // Emit the event ONLY to the targeted player's socket
     io.to(targetPlayerId).emit("option_eliminated", { optionIndex: parsedOptionIndex });
     console.log(`➡️ Admin in room ${roomId} eliminated option ${parsedOptionIndex} for player ${targetPlayerId}`);
   });
 
   // --- Player submits answer ---
-  socket.on("submit_answer", ({ roomId, questionId, answer }) => {
+  socket.on("submit_answer", ({ roomId, answer }) => {
     const game = games[roomId];
     if (!game || !game.players[socket.id]) return;
     if (game.answered[socket.id]) return;
 
     const currentIndex = game.playerCurrentQIndex[socket.id];
-    const currentQuestion = game.playerQuestions[socket.id][currentIndex];
+    const currentQuestion = game.playerQuestionsList[socket.id][currentIndex];
     if (!currentQuestion) return;
 
     game.answered[socket.id] = true;
@@ -286,14 +271,34 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("score_update", game.scores);
   });
 
+  //handle admin exit
+  socket.on("admin_exit", ({ roomId }) => {
+    const game = games[roomId];
+    if (!game || socket.id !== game.admin) {
+      return;
+    }
+    
+    io.to(roomId).emit("quiz_ended", { message: "The admin has ended the quiz." });
+    
+    socket.isIntentionalExit = true;
+    delete games[roomId];
+    console.log(`🗑️ Room ${roomId} has been completely removed.`);
+  });
+  
   // --- Handle disconnect ---
   socket.on("disconnect", () => {
     console.log("❌ User Disconnected:", socket.id);
+    
     for (const roomId in games) {
       const game = games[roomId];
       if (!game) continue;
 
       if (socket.id === game.admin) {
+        if (socket.isIntentionalExit) {
+          console.log(`Admin ${socket.id} exited intentionally.`);
+          return; 
+        }
+
         const playerIds = Object.keys(game.players);
         if (playerIds.length > 0) {
           game.admin = playerIds[0];
@@ -301,19 +306,31 @@ io.on("connection", (socket) => {
           delete game.players[game.admin];
           delete game.scores[game.admin];
           delete game.playerQuestions[game.admin];
+          delete game.playerQuestionsList[game.admin];
           delete game.playerCurrentQIndex[game.admin];
+          console.log(`Admin ${socket.id} disconnected. New admin is ${game.admin}.`);
         } else {
           delete games[roomId];
-          console.log(`🗑️ Room ${roomId} deleted`);
-          continue;
+          console.log(`🗑️ Room ${roomId} deleted as no players remained.`);
         }
+      } 
+      else if (game.players[socket.id]) {
+        console.log(`Player ${game.players[socket.id]} left room ${roomId}.`);
+        delete game.players[socket.id];
+        delete game.scores[socket.id];
+        delete game.playerQuestions[socket.id];
+        delete game.playerQuestionsList[socket.id];
+        delete game.playerCurrentQIndex[socket.id];
       }
-      // Player data is preserved for reconnection
+
       io.to(roomId).emit("game_state", {
         players: game.players,
         scores: game.scores,
         adminId: game.admin,
         adminName: game.adminName,
+        questions: game.playerQuestions,
+        currentQuestionIndex: game.currentQuestionIndex,
+        eliminatedOptions: game.eliminatedOptions,
       });
     }
   });

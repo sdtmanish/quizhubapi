@@ -287,6 +287,28 @@ io.on("connection", (socket) => {
     console.log(`➡️ Admin in room ${roomId} eliminated option ${parsedOptionIndex} for player ${targetPlayerId}`);
   });
 
+  // --- Admin restores an eliminated option for a player ---
+  socket.on("restore_option", ({ roomId, targetPlayerId, optionIndex }) => {
+    const game = games[roomId];
+    if (!game || socket.id !== game.admin) {
+      return;
+    }
+
+    const parsedOptionIndex = parseInt(optionIndex, 10);
+    if (isNaN(parsedOptionIndex)) {
+      return;
+    }
+
+    if (game.eliminatedOptions[targetPlayerId]) {
+      game.eliminatedOptions[targetPlayerId] = game.eliminatedOptions[targetPlayerId].filter(
+        idx => idx !== parsedOptionIndex
+      );
+    }
+
+    io.to(targetPlayerId).emit("option_restored", { optionIndex: parsedOptionIndex });
+    console.log(`🔄 Admin in room ${roomId} restored option ${parsedOptionIndex} for player ${targetPlayerId}`);
+  });
+
   // --- Player submits answer ---
   socket.on("submit_answer", ({ roomId, answer }) => {
     const game = games[roomId];

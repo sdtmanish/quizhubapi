@@ -299,9 +299,16 @@ io.on("connection", (socket) => {
 
     game.answered[socket.id] = true;
 
-    if (answer === currentQuestion.correctAnswer) {
+    const isCorrect = answer === currentQuestion.correctAnswer;
+    if (isCorrect) {
       game.scores[socket.id] += 10;
     }
+
+    // Send answer result back to the player
+    socket.emit("answer_result", {
+      correctAnswer: currentQuestion.correctAnswer,
+      isCorrect: isCorrect
+    });
 
     io.to(roomId).emit("score_update", game.scores);
   });

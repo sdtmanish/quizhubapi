@@ -80,9 +80,17 @@ io.on("connection", (socket) => {
 
     const game = games[roomId];
 
-    if (isAdmin && socket.id !== game.admin) {
-      socket.emit("admin_exists");
-      return;
+    // Admin reconnection logic - check by name instead of socket ID
+    if (isAdmin) {
+      if (game.adminName === playerName) {
+        // This is the same admin reconnecting, update their socket ID
+        console.log(`🔄 Admin ${playerName} reconnected to room ${roomId} with new socket ${socket.id}`);
+        game.admin = socket.id;
+      } else if (socket.id !== game.admin) {
+        // Different admin trying to join
+        socket.emit("admin_exists");
+        return;
+      }
     }
 
     socket.join(roomId);
@@ -121,6 +129,21 @@ io.on("connection", (socket) => {
         // **NEW:** Populate the current question for the player
         if (game.playerQuestionsList[playerId].length > 0) {
           game.playerQuestions[playerId] = game.playerQuestionsList[playerId][0];
+          
+          // If quiz is already active, send the current question immediately
+          if (game.isQuizActive && game.currentQuestionIndex >= 0) {
+            const currentQuestionIndex = Math.min(game.currentQuestionIndex, game.playerQuestionsList[playerId].length - 1);
+            game.playerCurrentQIndex[playerId] = currentQuestionIndex;
+            game.playerQuestions[playerId] = game.playerQuestionsList[playerId][currentQuestionIndex];
+            
+            // Send the question to the newly joined player
+            setTimeout(() => {
+              io.to(playerId).emit("show_question", {
+                question: game.playerQuestions[playerId],
+                index: currentQuestionIndex,
+              });
+            }, 200);
+          }
         }
       }
       gameIdToPlayerIdMap[gameId] = playerId;
@@ -135,6 +158,8 @@ io.on("connection", (socket) => {
       questions: game.playerQuestions,
       currentQuestionIndex: game.currentQuestionIndex,
       eliminatedOptions: game.eliminatedOptions,
+      isQuizActive: game.isQuizActive,
+      adminQuestionList: game.adminQuestionList,
     });
   });
 
@@ -161,17 +186,14 @@ io.on("connection", (socket) => {
       const playerQuestions = game.playerQuestionsList[playerId];
       game.playerCurrentQIndex[playerId] = 0;
       
-      game.playerQuestions[playerId] = playerQuestions[0]; 
-
-      io.to(playerId).emit("show_question", {
-        question: playerQuestions[0],
-        index: 0,
-      });
+      if (playerQuestions && playerQuestions.length > 0) {
+        game.playerQuestions[playerId] = playerQuestions[0];
+      }
     }
 
     console.log(`🚀 Quiz started in room ${roomId}`);
     
-    // Broadcast the updated game state to everyone, including the admin
+    // First, broadcast the updated game state to everyone
     io.to(roomId).emit("game_state", {
       players: game.players,
       scores: game.scores,
@@ -181,6 +203,19 @@ io.on("connection", (socket) => {
       currentQuestionIndex: game.currentQuestionIndex,
       eliminatedOptions: game.eliminatedOptions,
     });
+
+    // Then send individual questions to players with a slight delay to ensure they're ready
+    setTimeout(() => {
+      for (const playerId in game.players) {
+        const playerQuestions = game.playerQuestionsList[playerId];
+        if (playerQuestions && playerQuestions.length > 0) {
+          io.to(playerId).emit("show_question", {
+            question: playerQuestions[0],
+            index: 0,
+          });
+        }
+      }
+    }, 500); // 500ms delay to ensure players are ready
   });
 
   // --- Admin sends next question ---
@@ -252,6 +287,28 @@ io.on("connection", (socket) => {
     console.log(`➡️ Admin in room ${roomId} eliminated option ${parsedOptionIndex} for player ${targetPlayerId}`);
   });
 
+  // --- Admin restores an eliminated option for a player ---
+  socket.on("restore_option", ({ roomId, targetPlayerId, optionIndex }) => {
+    const game = games[roomId];
+    if (!game || socket.id !== game.admin) {
+      return;
+    }
+
+    const parsedOptionIndex = parseInt(optionIndex, 10);
+    if (isNaN(parsedOptionIndex)) {
+      return;
+    }
+
+    if (game.eliminatedOptions[targetPlayerId]) {
+      game.eliminatedOptions[targetPlayerId] = game.eliminatedOptions[targetPlayerId].filter(
+        idx => idx !== parsedOptionIndex
+      );
+    }
+
+    io.to(targetPlayerId).emit("option_restored", { optionIndex: parsedOptionIndex });
+    console.log(`🔄 Admin in room ${roomId} restored option ${parsedOptionIndex} for player ${targetPlayerId}`);
+  });
+
   // --- Player submits answer ---
   socket.on("submit_answer", ({ roomId, answer }) => {
     const game = games[roomId];
@@ -264,9 +321,16 @@ io.on("connection", (socket) => {
 
     game.answered[socket.id] = true;
 
-    if (answer === currentQuestion.correctAnswer) {
+    const isCorrect = answer === currentQuestion.correctAnswer;
+    if (isCorrect) {
       game.scores[socket.id] += 10;
     }
+
+    // Send answer result back to the player
+    socket.emit("answer_result", {
+      correctAnswer: currentQuestion.correctAnswer,
+      isCorrect: isCorrect
+    });
 
     io.to(roomId).emit("score_update", game.scores);
   });

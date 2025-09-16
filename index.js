@@ -80,9 +80,17 @@ io.on("connection", (socket) => {
 
     const game = games[roomId];
 
-    if (isAdmin && socket.id !== game.admin) {
-      socket.emit("admin_exists");
-      return;
+    // Admin reconnection logic - check by name instead of socket ID
+    if (isAdmin) {
+      if (game.adminName === playerName) {
+        // This is the same admin reconnecting, update their socket ID
+        console.log(`🔄 Admin ${playerName} reconnected to room ${roomId} with new socket ${socket.id}`);
+        game.admin = socket.id;
+      } else if (socket.id !== game.admin) {
+        // Different admin trying to join
+        socket.emit("admin_exists");
+        return;
+      }
     }
 
     socket.join(roomId);
@@ -150,6 +158,8 @@ io.on("connection", (socket) => {
       questions: game.playerQuestions,
       currentQuestionIndex: game.currentQuestionIndex,
       eliminatedOptions: game.eliminatedOptions,
+      isQuizActive: game.isQuizActive,
+      adminQuestionList: game.adminQuestionList,
     });
   });
 

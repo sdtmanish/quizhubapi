@@ -263,6 +263,18 @@ io.on("connection", (socket) => {
     });
   });
 
+//Player Req for Eliminating wrong options
+socket.on("request_elimination", ({roomId,playerId})=>{
+
+  const game = games[roomId];
+  if(!game) return;
+  console.log(`Player ${playerId} requested elimination`);
+
+  if(game.admin){
+    io.to(game.admin).emit("elimination_requested", {playerId});
+  }
+})
+
   // --- Admin eliminates an option for a player ---
   socket.on("eliminate_option", ({ roomId, targetPlayerId, optionIndex }) => {
     const game = games[roomId];

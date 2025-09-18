@@ -333,6 +333,9 @@ io.on("connection", (socket) => {
     });
 
     io.to(roomId).emit("score_update", game.scores);
+
+    //admin know this player has answered 
+    io.to(roomId).emit("player_answered", {playerId:socket.id})
   });
 
   //handle admin exit

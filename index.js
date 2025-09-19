@@ -321,6 +321,74 @@ socket.on("request_elimination", ({roomId,playerId})=>{
     console.log(`🔄 Admin in room ${roomId} restored option ${parsedOptionIndex} for player ${targetPlayerId}`);
   });
 
+ // Admin eliminates one wrong option
+socket.on("eliminate_one_wrong", ({ roomId, targetPlayerId }) => {
+  const game = games[roomId];
+  if (!game || socket.id !== game.admin) return;
+
+  const currentIndex = game.playerCurrentQIndex[targetPlayerId];
+  const question = game.playerQuestionsList[targetPlayerId]?.[currentIndex];
+  if (!question) return;
+
+  // Get all wrong option indexes
+  const wrongOptions = question.options
+    .map((opt, i) => i)
+    .filter(i => i !== question.correctAnswer);
+
+  if (wrongOptions.length > 0) {
+    const randomWrong = wrongOptions[Math.floor(Math.random() * wrongOptions.length)];
+    
+    // Save to eliminatedOptions
+    if (!game.eliminatedOptions[targetPlayerId]) {
+      game.eliminatedOptions[targetPlayerId] = [];
+    }
+    if (!game.eliminatedOptions[targetPlayerId].includes(randomWrong)) {
+      game.eliminatedOptions[targetPlayerId].push(randomWrong);
+    }
+
+    // Tell that player and admin
+    io.to(targetPlayerId).emit("option_eliminated", { optionIndex: randomWrong, targetPlayerId });
+    io.to(game.admin).emit("option_eliminated", { optionIndex: randomWrong, targetPlayerId });
+
+    console.log(`⚡ Eliminated ONE wrong option (${randomWrong}) for player ${targetPlayerId}`);
+  }
+});
+
+// Admin eliminates two wrong options (50:50)
+socket.on("eliminate_two_wrong", ({ roomId, targetPlayerId }) => {
+  const game = games[roomId];
+  if (!game || socket.id !== game.admin) return;
+
+  const currentIndex = game.playerCurrentQIndex[targetPlayerId];
+  const question = game.playerQuestionsList[targetPlayerId]?.[currentIndex];
+  if (!question) return;
+
+  // Get all wrong option indexes
+  const wrongOptions = question.options
+    .map((opt, i) => i)
+    .filter(i => i !== question.correctAnswer);
+
+  // Pick two random wrong options
+  const shuffled = wrongOptions.sort(() => Math.random() - 0.5);
+  const chosen = shuffled.slice(0, 2);
+
+  if (!game.eliminatedOptions[targetPlayerId]) {
+    game.eliminatedOptions[targetPlayerId] = [];
+  }
+
+  chosen.forEach(optionIndex => {
+    if (!game.eliminatedOptions[targetPlayerId].includes(optionIndex)) {
+      game.eliminatedOptions[targetPlayerId].push(optionIndex);
+
+      io.to(targetPlayerId).emit("option_eliminated", { optionIndex, targetPlayerId });
+      io.to(game.admin).emit("option_eliminated", { optionIndex, targetPlayerId });
+    }
+  });
+
+  console.log(`⚡ Eliminated TWO wrong options (${chosen}) for player ${targetPlayerId}`);
+});
+
+
   // --- Player submits answer ---
   socket.on("submit_answer", ({ roomId, answer }) => {
     const game = games[roomId];

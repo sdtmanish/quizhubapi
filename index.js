@@ -55,7 +55,7 @@ io.on("connection", (socket) => {
   console.log("✅ User Connected:", socket.id);
 
   // --- Player/Admin joins a game ---
-  socket.on("join_game", async ({ roomId, playerName, isAdmin, gameId }) => {
+  socket.on("join_game", async ({ roomId, playerName, isAdmin, gameId, eliminationsPerPlayer }) => {
     if (!games[roomId]) {
       if (!isAdmin) {
         socket.emit("room_not_found");
@@ -73,7 +73,9 @@ io.on("connection", (socket) => {
         isQuizActive: false,
         adminQuestionList: [],
         currentQuestionIndex: -1,
+        eliminationsPerPlayer: eliminationsPerPlayer ?? 0,
         eliminatedOptions: {},
+        eliminationsUsed: {},
       };
       console.log(`⭐ Room ${roomId} created by admin ${playerName}`);
     }
@@ -107,6 +109,7 @@ io.on("connection", (socket) => {
         game.playerQuestionsList[playerId] = game.playerQuestionsList[oldSocketId];
         game.playerCurrentQIndex[playerId] = game.playerCurrentQIndex[oldSocketId];
         game.eliminatedOptions[playerId] = game.eliminatedOptions[oldSocketId] || [];
+        game.eliminationsUsed[playerId] = game.eliminationsUsed[oldSocketId] || 0;
 
         delete game.players[oldSocketId];
         delete game.scores[oldSocketId];
@@ -114,6 +117,7 @@ io.on("connection", (socket) => {
         delete game.playerQuestionsList[oldSocketId];
         delete game.playerCurrentQIndex[oldSocketId];
         delete game.eliminatedOptions[oldSocketId];
+        delete game.eliminationsUsed[oldSocketId];
 
         console.log(`🔄 Player ${playerName} reconnected to room ${roomId}`);
       } else {
@@ -124,6 +128,7 @@ io.on("connection", (socket) => {
         game.playerQuestionsList[playerId] = shuffleArray([...allQuestions]);
         game.playerCurrentQIndex[playerId] = -1;
         game.eliminatedOptions[playerId] = [];
+        game.eliminationsUsed[playerId] = 0;
         console.log(`➕ New player ${playerName} joined room ${roomId}.`);
         
         // **NEW:** Populate the current question for the player
@@ -160,6 +165,8 @@ io.on("connection", (socket) => {
       eliminatedOptions: game.eliminatedOptions,
       isQuizActive: game.isQuizActive,
       adminQuestionList: game.adminQuestionList,
+      eliminationsPerPlayer:game.eliminationsPerPlayer,
+      eliminationsUsed: game.eliminationsUsed,
     });
   });
 
@@ -206,74 +213,119 @@ io.on("connection", (socket) => {
 
     // Then send individual questions to players with a slight delay to ensure they're ready
     setTimeout(() => {
-      for (const playerId in game.players) {
-        const playerQuestions = game.playerQuestionsList[playerId];
-        if (playerQuestions && playerQuestions.length > 0) {
-          io.to(playerId).emit("show_question", {
-            question: playerQuestions[0],
-            index: 0,
-          });
-        }
-      }
-    }, 500); // 500ms delay to ensure players are ready
+  for (const playerId in game.players) {
+    const playerQuestions = game.playerQuestionsList[playerId];
+    if (playerQuestions && playerQuestions.length > 0) {
+     io.to(playerId).emit("show_question", {
+  question: playerQuestions[0],
+  index: 0,
+  eliminationsPerPlayer: game.eliminationsPerPlayer || 0,
+  eliminationsUsed: game.eliminationsUsed || {},
+});
+
+    }
+  }
+}, 500);
+ // 500ms delay to ensure players are ready
   });
 
   // --- Admin sends next question ---
-  socket.on("next_question", ({ roomId }) => {
-    const game = games[roomId];
-    if (!game || socket.id !== game.admin) return;
+ // --- Admin sends next question ---
+socket.on("next_question", ({ roomId }) => {
+  const game = games[roomId];
+  if (!game || socket.id !== game.admin) return;
 
-    game.currentQuestionIndex++;
-    game.answered = {};
-    game.eliminatedOptions = {};
+  game.currentQuestionIndex++;
+  game.answered = {};
+  game.eliminatedOptions = {};
 
-    if (game.currentQuestionIndex >= game.adminQuestionList.length) {
-      game.isQuizActive = false;
-      io.to(roomId).emit("quiz_ended", game.scores);
-      return;
+  if (game.currentQuestionIndex >= game.adminQuestionList.length) {
+    game.isQuizActive = false;
+    io.to(roomId).emit("quiz_ended", game.scores);
+    return;
+  }
+
+  // Update the current question for each player
+  for (const playerId in game.players) {
+    game.playerCurrentQIndex[playerId]++;
+    const nextQIndex = game.playerCurrentQIndex[playerId];
+    const playerQuestions = game.playerQuestionsList[playerId];
+
+    if (nextQIndex < playerQuestions.length) {
+      const nextQuestion = playerQuestions[nextQIndex];
+      game.playerQuestions[playerId] = nextQuestion;
+
+      io.to(playerId).emit("show_question", {
+        question: nextQuestion,
+        index: nextQIndex,
+        eliminationsPerPlayer: game.eliminationsPerPlayer || 0,
+        eliminationsUsed: game.eliminationsUsed || {},   // ✅ always send object
+      });
+    } else {
+      io.to(playerId).emit("player_quiz_ended");
     }
+  }
 
-    // Update the current question for each player
-    for (const playerId in game.players) {
-      game.playerCurrentQIndex[playerId]++;
-      const nextQIndex = game.playerCurrentQIndex[playerId];
-      const playerQuestions = game.playerQuestionsList[playerId];
-
-      if (nextQIndex < playerQuestions.length) {
-        const nextQuestion = playerQuestions[nextQIndex];
-        game.playerQuestions[playerId] = nextQuestion;
-        
-        io.to(playerId).emit("show_question", {
-          question: nextQuestion,
-          index: nextQIndex,
-        });
-      } else {
-        io.to(playerId).emit("player_quiz_ended");
-      }
-    }
-    
-    io.to(roomId).emit("game_state", {
-      players: game.players,
-      scores: game.scores,
-      adminId: game.admin,
-      adminName: game.adminName,
-      questions: game.playerQuestions,
-      currentQuestionIndex: game.currentQuestionIndex,
-      eliminatedOptions: game.eliminatedOptions,
-    });
+  // ✅ include eliminations info in game_state
+  io.to(roomId).emit("game_state", {
+    players: game.players,
+    scores: game.scores,
+    adminId: game.admin,
+    adminName: game.adminName,
+    questions: game.playerQuestions,
+    currentQuestionIndex: game.currentQuestionIndex,
+    eliminatedOptions: game.eliminatedOptions,
+    isQuizActive: game.isQuizActive,
+    adminQuestionList: game.adminQuestionList,
+    eliminationsPerPlayer: game.eliminationsPerPlayer || 0,
+    eliminationsUsed: game.eliminationsUsed || {},
   });
+});
 
 //Player Req for Eliminating wrong options
-socket.on("request_elimination", ({roomId,playerId})=>{
-
+// Player requests an elimination (just forward to admin, don't auto-eliminate)
+socket.on("request_elimination", ({ roomId, playerId }) => {
   const game = games[roomId];
-  if(!game) return;
-  console.log(`Player ${playerId} requested elimination`);
+  if (!game) return;
 
-  if(game.admin){
-    io.to(game.admin).emit("elimination_requested", {playerId});
+  console.log(`⚡ Player ${playerId} requested elimination`);
+
+  // Enforce per-player elimination limits
+  if ((game.eliminationsUsed[playerId] || 0) >= game.eliminationsPerPlayer) {
+    io.to(playerId).emit("elimination_denied", {
+      reason: "limit_reached",
+      message: "You have already used all your eliminations!",
+    });
+    return;
   }
-})
+
+  // ✅ Increment usage immediately
+  game.eliminationsUsed[playerId] = (game.eliminationsUsed[playerId] || 0) + 1;
+
+  // ✅ Forward request info to admin only
+  if (game.admin) {
+    io.to(game.admin).emit("elimination_requested", {
+      playerId,
+      used: game.eliminationsUsed[playerId],
+      allowed: game.eliminationsPerPlayer,
+    });
+  }
+
+  // ✅ Sync updated state (so both admin & players see usage count)
+  io.to(roomId).emit("game_state", {
+    players: game.players,
+    scores: game.scores,
+    adminId: game.admin,
+    adminName: game.adminName,
+    questions: game.playerQuestions,
+    currentQuestionIndex: game.currentQuestionIndex,
+    eliminatedOptions: game.eliminatedOptions,
+    isQuizActive: game.isQuizActive,
+    adminQuestionList: game.adminQuestionList,
+    eliminationsPerPlayer: game.eliminationsPerPlayer,
+    eliminationsUsed: game.eliminationsUsed,
+  });
+});
 
   // --- Admin eliminates an option for a player ---
   socket.on("eliminate_option", ({ roomId, targetPlayerId, optionIndex }) => {

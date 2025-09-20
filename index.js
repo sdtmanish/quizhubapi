@@ -485,42 +485,37 @@ socket.on("eliminate_two_wrong", ({ roomId, targetPlayerId }) => {
   });
   
   // --- Handle disconnect ---
-  socket.on("disconnect", () => {
-    console.log("❌ User Disconnected:", socket.id);
-    
-    for (const roomId in games) {
-      const game = games[roomId];
-      if (!game) continue;
+socket.on("disconnect", () => {
+  console.log("❌ User Disconnected:", socket.id);
 
-      if (socket.id === game.admin) {
-        if (socket.isIntentionalExit) {
-          console.log(`Admin ${socket.id} exited intentionally.`);
-          return; 
-        }
+  for (const roomId in games) {
+    const game = games[roomId];
+    if (!game) continue;
 
-        const playerIds = Object.keys(game.players);
-        if (playerIds.length > 0) {
-          game.admin = playerIds[0];
-          game.adminName = game.players[game.admin];
-          delete game.players[game.admin];
-          delete game.scores[game.admin];
-          delete game.playerQuestions[game.admin];
-          delete game.playerQuestionsList[game.admin];
-          delete game.playerCurrentQIndex[game.admin];
-          console.log(`Admin ${socket.id} disconnected. New admin is ${game.admin}.`);
-        } else {
-          delete games[roomId];
-          console.log(`🗑️ Room ${roomId} deleted as no players remained.`);
-        }
-      } 
-      else if (game.players[socket.id]) {
-        console.log(`Player ${game.players[socket.id]} left room ${roomId}.`);
-        delete game.players[socket.id];
-        delete game.scores[socket.id];
-        delete game.playerQuestions[socket.id];
-        delete game.playerQuestionsList[socket.id];
-        delete game.playerCurrentQIndex[socket.id];
+    // If the admin disconnected
+    if (socket.id === game.admin) {
+      // If it was intentional, already handled by admin_exit
+      if (socket.isIntentionalExit) {
+        console.log(`Admin ${socket.id} exited intentionally.`);
+        return;
       }
+
+      // ❌ End quiz for all players
+      io.to(roomId).emit("quiz_ended", { message: "The admin has disconnected. Quiz ended." });
+
+      // 🗑️ Delete the room
+      delete games[roomId];
+      console.log(`🗑️ Room ${roomId} deleted because admin disconnected.`);
+    }
+
+    // If a normal player disconnected
+    else if (game.players[socket.id]) {
+      console.log(`Player ${game.players[socket.id]} left room ${roomId}.`);
+      delete game.players[socket.id];
+      delete game.scores[socket.id];
+      delete game.playerQuestions[socket.id];
+      delete game.playerQuestionsList[socket.id];
+      delete game.playerCurrentQIndex[socket.id];
 
       io.to(roomId).emit("game_state", {
         players: game.players,
@@ -532,7 +527,10 @@ socket.on("eliminate_two_wrong", ({ roomId, targetPlayerId }) => {
         eliminatedOptions: game.eliminatedOptions,
       });
     }
-  });
+  }
+});
+
+
 });
 
 const PORT = process.env.PORT || 3000;

@@ -8,6 +8,7 @@ const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: { origin: "*" },
+  transports:["websocket"], //only allow websocket
 });
 
 // --- Database Setup ---

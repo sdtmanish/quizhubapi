@@ -90,9 +90,31 @@ io.on("connection", (socket) => {
         console.log(`🔄 Admin ${playerName} reconnected to room ${roomId} with new socket ${socket.id}`);
         game.admin = socket.id;
       } else if (socket.id !== game.admin) {
-        // Different admin trying to join
-        socket.emit("admin_exists");
-        return;
+        // Different admin trying to join - check if quiz is over or inactive
+        if (!game.isQuizActive) {
+          console.log(`🔄 New admin ${playerName} taking over inactive room ${roomId} (previous admin: ${game.adminName})`);
+          // Reset the room for the new admin
+          games[roomId] = {
+            admin: socket.id,
+            adminName: playerName,
+            players: {},
+            scores: {},
+            playerQuestions: {}, 
+            playerQuestionsList: {}, 
+            playerCurrentQIndex: {},
+            answered: {},
+            isQuizActive: false,
+            adminQuestionList: [],
+            currentQuestionIndex: -1,
+            eliminationsPerPlayer: eliminationsPerPlayer ?? 0,
+            eliminatedOptions: {},
+            eliminationsUsed: {},
+          };
+        } else {
+          // Quiz is active, don't allow another admin
+          socket.emit("admin_exists");
+          return;
+        }
       }
     }
 
@@ -243,6 +265,13 @@ socket.on("next_question", ({ roomId }) => {
   if (game.currentQuestionIndex >= game.adminQuestionList.length) {
     game.isQuizActive = false;
     io.to(roomId).emit("quiz_ended", game.scores);
+    
+    // Clean up the room after quiz completion
+    setTimeout(() => {
+      delete games[roomId];
+      console.log(`🗑️ Room ${roomId} automatically deleted after quiz completion.`);
+    }, 1000); // Give clients time to receive the quiz_ended event
+    
     return;
   }
 

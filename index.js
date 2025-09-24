@@ -173,62 +173,62 @@ io.on("connection", (socket) => {
 
   // --- Admin starts quiz ---
   socket.on("start_quiz", async ({ roomId }) => {
-    const game = games[roomId];
-    if (!game || socket.id !== game.admin) return;
+  const game = games[roomId];
+  if (!game || socket.id !== game.admin) return;
 
-    const allQuestions = await Question.find({});
-    if (allQuestions.length === 0) {
-      socket.emit("no_questions_found");
-      return;
-    }
+  const allQuestions = await Question.find({});
+  if (allQuestions.length === 0) {
+    socket.emit("no_questions_found");
+    return;
+  }
 
-    // Initialize quiz
-    game.adminQuestionList = shuffleArray(allQuestions);
-    game.currentQuestionIndex = 0;
-    game.isQuizActive = true;
-    game.answered = {};
-    game.eliminatedOptions = {};
+  // ✅ FULL RESET for a clean new quiz
+  game.adminQuestionList = shuffleArray(allQuestions);
+  game.currentQuestionIndex = 0;
+  game.isQuizActive = true;
+  game.answered = {};
+  game.eliminatedOptions = {};
+  game.scores = {}; // reset scores
 
-    // Assign shuffled questions to each player & send them their first question
-    for (const playerId in game.players) {
-      const playerQuestions = game.playerQuestionsList[playerId];
-      game.playerCurrentQIndex[playerId] = 0;
-      
-      if (playerQuestions && playerQuestions.length > 0) {
-        game.playerQuestions[playerId] = playerQuestions[0];
-      }
-    }
-
-    console.log(`🚀 Quiz started in room ${roomId}`);
-    
-    // First, broadcast the updated game state to everyone
-    io.to(roomId).emit("game_state", {
-      players: game.players,
-      scores: game.scores,
-      adminId: game.admin,
-      adminName: game.adminName,
-      questions: game.playerQuestions,
-      currentQuestionIndex: game.currentQuestionIndex,
-      eliminatedOptions: game.eliminatedOptions,
-    });
-
-    // Then send individual questions to players with a slight delay to ensure they're ready
-    setTimeout(() => {
+  // reset per-player state
   for (const playerId in game.players) {
-    const playerQuestions = game.playerQuestionsList[playerId];
-    if (playerQuestions && playerQuestions.length > 0) {
-     io.to(playerId).emit("show_question", {
-  question: playerQuestions[0],
-  index: 0,
-  eliminationsPerPlayer: game.eliminationsPerPlayer || 0,
-  eliminationsUsed: game.eliminationsUsed || {},
+    const playerQuestions = shuffleArray([...allQuestions]); // fresh shuffle
+    game.playerQuestionsList[playerId] = playerQuestions;
+    game.playerCurrentQIndex[playerId] = 0;
+    game.playerQuestions[playerId] = playerQuestions[0];
+    game.scores[playerId] = 0; // reset score
+    game.eliminationsUsed[playerId] = 0;
+    game.eliminatedOptions[playerId] = [];
+  }
+
+  console.log(`🚀 New quiz started in room ${roomId}`);
+
+  // Broadcast state
+  io.to(roomId).emit("game_state", {
+    players: game.players,
+    scores: game.scores,
+    adminId: game.admin,
+    adminName: game.adminName,
+    questions: game.playerQuestions,
+    currentQuestionIndex: game.currentQuestionIndex,
+    eliminatedOptions: game.eliminatedOptions,
+    isQuizActive: game.isQuizActive,
+    adminQuestionList: game.adminQuestionList,
+  });
+
+  // Send first question individually
+  setTimeout(() => {
+    for (const playerId in game.players) {
+      io.to(playerId).emit("show_question", {
+        question: game.playerQuestions[playerId],
+        index: 0,
+        eliminationsPerPlayer: game.eliminationsPerPlayer || 0,
+        eliminationsUsed: game.eliminationsUsed || {},
+      });
+    }
+  }, 500);
 });
 
-    }
-  }
-}, 500);
- // 500ms delay to ensure players are ready
-  });
 
   // --- Admin sends next question ---
  // --- Admin sends next question ---
